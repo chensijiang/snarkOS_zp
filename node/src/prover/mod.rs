@@ -245,7 +245,8 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
             }
 
             // If the number of instances of the coinbase puzzle exceeds the maximum, then skip this iteration.
-            if self.num_puzzle_instances() > self.max_puzzle_instances {
+            if self.num_puzzle_instances() > 1{
+                info!("### num_puzzle_instances > 1   {}",self.num_puzzle_instances());
                 // Sleep for a brief period of time.
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
