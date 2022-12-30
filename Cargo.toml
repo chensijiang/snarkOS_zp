@@ -42,7 +42,7 @@ path = "../snarkVM_zp"
 #git = "https://github.com/AleoHQ/snarkVM.git"
 #rev = "d27939f"
 version = "0.9.10"
-features = ["circuit", "console", "parallel"]
+features = ["circuit", "console", "parallel", "cuda"]
 
 [dependencies.anyhow]
 version = "1"
