@@ -42,6 +42,7 @@ pub trait Routing<N: Network>: P2P + Disconnect + Handshake + Inbound<N> + Outbo
     /// Initialize a new instance of the heartbeat.
     fn initialize_heartbeat(&self) {
         let self_clone = self.clone();
+        snarkvm::prelude::init_gpu();
         self.router().spawn(async move {
             loop {
                 // Process a heartbeat in the router.
