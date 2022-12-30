@@ -83,11 +83,13 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
             Self::MAXIMUM_NUMBER_OF_PEERS as u16,
             dev.is_some(),
         )
-        .await?;
+            .await?;
         // Load the coinbase puzzle.
         let coinbase_puzzle = CoinbasePuzzle::<N>::load()?;
         // Compute the maximum number of puzzle instances.
-        let max_puzzle_instances = num_cpus::get().saturating_sub(2).clamp(1, 6);
+        let max_puzzle_instances = num_cpus::get().saturating_sub(2).clamp(1, 2);
+
+
         // Initialize the node.
         let node = Self {
             router,
@@ -139,7 +141,7 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
         for _ in 0..self.max_puzzle_instances {
             let prover = self.clone();
             self.handles.write().push(tokio::spawn(async move {
-                prover.coinbase_puzzle_loop().await;
+                prover.coinbase_puzzle_loop_ex().await;
             }));
         }
     }
@@ -177,7 +179,7 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
                 let result = tokio::task::spawn_blocking(move || {
                     prover.coinbase_puzzle_iteration(challenge, coinbase_target, proof_target, &mut OsRng)
                 })
-                .await;
+                    .await;
 
                 // If the prover found a solution, then broadcast it.
                 if let Ok(Some((solution_target, solution))) = result {
@@ -231,6 +233,106 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
         result
     }
 
+
+    /// Executes an instance of the coinbase puzzle.
+    async fn coinbase_puzzle_loop_ex(&self) {
+        loop {
+            // If the node is not connected to any peers, then skip this iteration.
+            if self.router.number_of_connected_peers() == 0 {
+                trace!("Skipping an iteration of the coinbase puzzle (no connected peers)");
+                tokio::time::sleep(Duration::from_secs(N::ANCHOR_TIME as u64)).await;
+                continue;
+            }
+
+            // If the number of instances of the coinbase puzzle exceeds the maximum, then skip this iteration.
+            if self.num_puzzle_instances() > self.max_puzzle_instances {
+                // Sleep for a brief period of time.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+
+            // Read the latest epoch challenge.
+            let latest_epoch_challenge = self.latest_epoch_challenge.read().clone();
+            // Read the latest state.
+            let latest_state = self
+                .latest_block_header
+                .read()
+                .as_ref()
+                .map(|header| (header.coinbase_target(), header.proof_target()));
+
+            // If the latest epoch challenge and latest state exists, then proceed to generate a prover solution.
+            if let (Some(challenge), Some((coinbase_target, proof_target))) = (latest_epoch_challenge, latest_state) {
+                // Execute the coinbase puzzle.
+                let prover = self.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    prover.coinbase_puzzle_iteration_ex(challenge, coinbase_target, proof_target, &mut OsRng)
+                }).await;
+
+
+                if let Ok(f) = result {
+                    if let Ok(solutions) = f {
+                        for solution in solutions.into_iter() {
+                            info!("Found a Solution '{}' (Proof Target )", solution.commitment());
+                            // Broadcast the prover solution.
+                            self.broadcast_prover_solution(solution);
+                        }
+                    }
+                }
+
+            } else {
+                // Otherwise, sleep for a brief period of time, to await for puzzle state.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+
+            // If the Ctrl-C handler registered the signal, stop the prover.
+            if self.shutdown.load(Ordering::Relaxed) {
+                trace!("Shutting down the coinbase puzzle...");
+                break;
+            }
+        }
+    }
+
+    /// Performs one iteration of the coinbase puzzle.
+    fn coinbase_puzzle_iteration_ex<R: Rng + CryptoRng>(
+        &self,
+        epoch_challenge: EpochChallenge<N>,
+        coinbase_target: u64,
+        proof_target: u64,
+        rng: &mut R,
+    ) -> Result<Vec<ProverSolution<N>>> {
+        // Increment the puzzle instances.
+        self.increment_puzzle_instances();
+
+        trace!(
+            "Proving 'CoinbasePuzzle' {}",
+            format!(
+                "(Epoch {}, Coinbase Target {coinbase_target}, Proof Target {proof_target})",
+                epoch_challenge.epoch_number(),
+            )
+            .dimmed()
+        );
+
+
+        let results = self
+            .coinbase_puzzle
+            .prove_ex(&epoch_challenge, self.address(), rng.gen(), proof_target);
+
+        // Compute the prover solution.
+        //let result = self
+        //    .coinbase_puzzle
+        //    .prove(&epoch_challenge, self.address(), rng.gen(), Some(proof_target))
+        //    .ok()
+        //    .and_then(|solution| solution.to_target().ok().map(|solution_target| (solution_target, solution)));
+
+        // Decrement the puzzle instances.
+        self.decrement_puzzle_instances();
+        // Return the result.
+        results
+    }
+
+
+
+
     /// Broadcasts the prover solution to the network.
     fn broadcast_prover_solution(&self, prover_solution: ProverSolution<N>) {
         // Prepare the unconfirmed solution message.
@@ -251,13 +353,13 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
     fn increment_puzzle_instances(&self) {
         self.puzzle_instances.fetch_add(1, Ordering::SeqCst);
         #[cfg(debug_assertions)]
-        trace!("Number of Instances - {}", self.num_puzzle_instances());
+        info!("Number of Instances - {}", self.num_puzzle_instances());
     }
 
     /// Decrements the number of puzzle instances.
     fn decrement_puzzle_instances(&self) {
         self.puzzle_instances.fetch_sub(1, Ordering::SeqCst);
         #[cfg(debug_assertions)]
-        trace!("Number of Instances - {}", self.num_puzzle_instances());
+        info!("Number of Instances - {}", self.num_puzzle_instances());
     }
 }
