@@ -138,7 +138,7 @@ impl<N: Network, C: ConsensusStorage<N>> NodeInterface<N> for Prover<N, C> {
 impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
     /// Initialize a new instance of the coinbase puzzle.
     async fn initialize_coinbase_puzzle(&self) {
-        for _ in 0..1 {
+        for _ in 0..self.max_puzzle_instances {
             let prover = self.clone();
             self.handles.write().push(tokio::spawn(async move {
                 prover.coinbase_puzzle_loop_ex().await;
@@ -247,8 +247,7 @@ impl<N: Network, C: ConsensusStorage<N>> Prover<N, C> {
             info!("### call coinbase_puzzle_loop_ex ");
 
             // If the number of instances of the coinbase puzzle exceeds the maximum, then skip this iteration.
-            if self.num_puzzle_instances() > 1{
-                info!("### num_puzzle_instances > 1   {}",self.num_puzzle_instances());
+            if self.num_puzzle_instances() > self.max_puzzle_instances {
                 // Sleep for a brief period of time.
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
